@@ -8,7 +8,15 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
+from functools import lru_cache
 from agent.graph import build_graph
+
+
+@lru_cache(maxsize=1)
+def get_graph():
+    """Build the LangGraph pipeline once and cache it for all requests."""
+    return build_graph()
+
 
 load_dotenv()
 
@@ -44,7 +52,7 @@ def analyze(request: QueryRequest):
     if not request.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
-    graph = build_graph()
+    graph = get_graph()
     result = graph.invoke({
         "query": request.query,
         "sql_result": "",

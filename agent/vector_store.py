@@ -58,13 +58,24 @@ def build_vector_store(documents: list[dict], api_key: str):
     print(f"Vector store saved: {len(store)} documents at {STORE_PATH}")
 
 
+_vector_store_cache = None
+
+
+def get_vector_store() -> list[dict]:
+    """Load vector store from disk once and cache it in memory."""
+    global _vector_store_cache
+    if _vector_store_cache is None:
+        with open(STORE_PATH, "r", encoding="utf-8") as f:
+            _vector_store_cache = json.load(f)
+    return _vector_store_cache
+
+
 def query_vector_store(query: str, client: OpenAI, top_k: int = 3) -> list[dict]:
     """
     Embed the query, compute cosine similarity against all stored vectors,
     and return the top_k most similar documents.
     """
-    with open(STORE_PATH, "r", encoding="utf-8") as f:
-        store = json.load(f)
+    store = get_vector_store()
 
     query_embedding = get_embedding(query, client)
 

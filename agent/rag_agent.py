@@ -10,6 +10,8 @@ import os
 from openai import OpenAI
 from agent.vector_store import query_vector_store
 
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
 SYSTEM_PROMPT = """You are a financial research analyst. Answer the user's question
 using ONLY the provided document excerpts. Be specific and cite key figures where available.
 If the documents don't contain enough information, say so clearly."""
@@ -17,7 +19,6 @@ If the documents don't contain enough information, say so clearly."""
 
 def run_rag_agent(state: dict) -> dict:
     """LangGraph node: semantic search over VectorDB, then generate grounded answer."""
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     query = state["query"]
 
     # Step 1: Retrieve top-3 most semantically similar documents

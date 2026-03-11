@@ -9,6 +9,8 @@ from openai import OpenAI
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "../data/financial.db")
 
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
 SCHEMA = """
 Table: financials
 Columns:
@@ -37,7 +39,6 @@ Rules:
 
 def run_sql_agent(state: dict) -> dict:
     """LangGraph node: convert query to SQL and execute it."""
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     query = state["query"]
 
     # Step 1: Generate SQL from natural language
@@ -51,9 +52,9 @@ def run_sql_agent(state: dict) -> dict:
     )
     sql = response.choices[0].message.content.strip()
 
-    # Step 2: Execute SQL against SQLite
+    # Step 2: Execute SQL against SQLite (read-only — prevents injection from LLM output)
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
         cursor = conn.cursor()
         cursor.execute(sql)
         rows = cursor.fetchall()

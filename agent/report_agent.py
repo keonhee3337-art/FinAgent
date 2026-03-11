@@ -6,6 +6,8 @@ structured markdown report. Final node in the LangGraph pipeline.
 import os
 from openai import OpenAI
 
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
 SYSTEM_PROMPT = """You are a senior strategy consultant generating a structured analysis report.
 You have been given two inputs:
 1. SQL query results from a structured financial database
@@ -29,8 +31,6 @@ Keep it concise. Use numbers. Avoid filler language."""
 
 def run_report_agent(state: dict) -> dict:
     """LangGraph node: synthesize SQL + RAG results into a final report."""
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
     user_content = f"""Original question: {state['query']}
 
 SQL Results:
