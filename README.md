@@ -1,39 +1,48 @@
 # FinAgent — Multi-Agent Financial Analysis System
 
-**Live:** [keonhee-finagent.streamlit.app](https://keonhee-finagent.streamlit.app)
+**Live demo:** [keonhee-finagent.streamlit.app](https://keonhee-finagent.streamlit.app)
 
-A production multi-agent financial analysis system built with LangGraph, RAG, Text2SQL, FastAPI, and Streamlit. Answers natural language questions about Korean public companies using a three-agent pipeline that combines structured database queries with document-grounded reasoning.
+Built by **Keonhee Kim**, Business Administration student at Sungkyunkwan University (SKKU), South Korea.
+
+---
+
+FinAgent is a production-deployed, multi-agent financial analysis system that automates structured financial data retrieval and document-grounded reasoning for Korean public companies. It answers natural language questions like "Compare Samsung Electronics and SK Hynix operating margins from 2020 to 2024" by routing queries through a three-agent LangGraph pipeline — without any human decision-making at each step.
+
+**What it automates:** The workflow that would otherwise require an analyst to manually write SQL queries, search through financial documents, and synthesize findings into a structured report. FinAgent does this in one query, end-to-end.
 
 ---
 
 ## Architecture
 
 ```
-User query
+User query (natural language)
     │
     ▼
-[SQL Agent]          → GPT-4o generates SQL → executes against SQLite
-    │                  (Samsung, SK Hynix, LG Electronics — 2020–2024 financials)
-    ▼
-[RAG Agent]          → queries custom VectorDB → retrieves top-3 relevant chunks
-    │                  (OpenAI text-embedding-3-small + cosine similarity)
-    ▼
-[Report Agent]       → GPT-4o synthesizes SQL results + RAG findings
-    │                  → structured markdown: Key Findings, Financial Data, Market Context
-    ▼
-FastAPI backend      → POST /analyze endpoint
+[Router] — classifies query type
     │
-Streamlit frontend   → 3 tabs: Final Report | SQL Results | RAG Findings
+    ├── [SQL Agent]     GPT-4o generates SQL → executes against SQLite
+    │                   (Samsung Electronics, SK Hynix, LG Electronics — 2020–2024 financials)
+    │
+    ├── [RAG Agent]     Queries custom VectorDB → retrieves top-3 relevant document chunks
+    │                   (OpenAI text-embedding-3-small + NumPy cosine similarity)
+    │
+    └── [Report Agent]  GPT-4o synthesizes SQL results + RAG findings
+                        → Structured markdown: Key Findings, Financial Data, Market Context
+    │
+FastAPI backend   — POST /analyze endpoint
+    │
+Streamlit UI      — 3 tabs: Final Report | SQL Results | RAG Findings
 ```
 
-**Orchestration:** LangGraph `StateGraph` — shared `AgentState` (TypedDict) flows through nodes with typed edges. Linear pipeline: sql_agent → rag_agent → report_agent → END.
+**Orchestration:** LangGraph `StateGraph` with typed `AgentState` (TypedDict). Shared state flows through nodes with conditional edges. Streaming output via `graph.stream(stream_mode="values")`.
 
 ---
 
 ## Key Technical Decisions
 
-### Custom VectorDB instead of ChromaDB
-ChromaDB is incompatible with Python 3.14 due to a Pydantic v1 runtime type inference issue. Rather than downgrade Python or pin a broken dependency, a custom vector database was built from primitives:
+### Custom VectorDB (not ChromaDB or Pinecone)
+
+ChromaDB is incompatible with Python 3.14. Instead of downgrading or pinning a broken dependency, a custom vector database was built from NumPy primitives:
 
 ```python
 import numpy as np
@@ -42,61 +51,91 @@ def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 ```
 
-Embeddings are generated via OpenAI `text-embedding-3-small`, stored as JSON, and retrieved via cosine similarity at query time. No external VectorDB dependency.
+Embeddings (OpenAI `text-embedding-3-small`, 1536 dims) are stored as JSON and retrieved via cosine similarity at query time. Zero external VectorDB dependencies — runs anywhere Python runs.
 
 ### Text2SQL with schema injection
-The SQL agent injects the full SQLite schema into the GPT-4o system prompt. This gives the model exact column names and types, preventing hallucinated field names and improving SQL accuracy on first attempt.
 
-### UNIQUE constraint on financial data
-`init_db.py` uses `UNIQUE(company, year)` with `INSERT OR IGNORE` to prevent duplicate records when the database initialization script is run multiple times.
+The SQL agent injects the full SQLite schema into the GPT-4o system prompt. This gives the model exact column names and types, eliminating hallucinated field names and achieving high SQL accuracy on the first attempt:
+
+```python
+system_prompt = f"""
+You are a SQL expert. The database schema is:
+{schema}
+Generate a valid SQLite query for the following question.
+"""
+```
+
+### LangGraph streaming for progressive rendering
+
+Output streams as each agent completes, not after the full pipeline finishes:
+
+```python
+for state in graph.stream(initial_state, config=config, stream_mode="values"):
+    if state.get("sql_result"):
+        sql_placeholder.code(state["sql_result"])
+    if state.get("rag_result"):
+        rag_placeholder.markdown(state["rag_result"])
+    if state.get("report"):
+        report_placeholder.markdown(state["report"])
+```
+
+### UNIQUE constraint prevents duplicate data
+
+`init_db.py` uses `UNIQUE(company, year)` with `INSERT OR IGNORE`, so the initialization script is idempotent — safe to re-run without duplicating financial records.
 
 ---
 
 ## Stack
 
 | Layer | Technology |
-|-------|-----------|
-| Orchestration | LangGraph (StateGraph, TypedDict AgentState) |
+|-------|------------|
+| Agent orchestration | LangGraph `StateGraph` (v1.1+), typed AgentState |
 | Structured retrieval | Text2SQL — GPT-4o + SQLite |
-| Semantic retrieval | RAG — custom VectorDB (OpenAI `text-embedding-3-small` + NumPy cosine similarity) |
-| Report generation | GPT-4o |
-| Backend | FastAPI |
-| Frontend | Streamlit |
-| Database | SQLite (Samsung Electronics, SK Hynix, LG Electronics, 2020–2024) |
+| Semantic retrieval | RAG — custom VectorDB (OpenAI embeddings + NumPy cosine similarity) |
+| Report synthesis | GPT-4o |
+| Backend | FastAPI (async, CORS-enabled) |
+| Frontend | Streamlit (streaming, session state, cached graph) |
+| Database | SQLite (Korean financial data, 2020–2024) |
+| Embeddings | OpenAI `text-embedding-3-small` (1536 dims) |
 
 ---
 
 ## Data
 
-Korean public company financials sourced from public disclosures:
+Korean public company financials sourced from public DART disclosures and annual reports:
 
 | Company | Years | Fields |
 |---------|-------|--------|
-| Samsung Electronics | 2020–2024 | revenue, operating_profit, net_income, total_assets, total_liabilities, equity |
-| SK Hynix | 2020–2024 | same |
-| LG Electronics | 2020–2024 | same |
+| Samsung Electronics (삼성전자) | 2020–2024 | revenue, operating_profit, net_income, total_assets, total_liabilities, equity |
+| SK Hynix (SK하이닉스) | 2020–2024 | same |
+| LG Electronics (LG전자) | 2020–2024 | same |
+
+All figures in Korean Won (KRW, billions). Source: Korea Financial Supervisory Service DART system.
 
 ---
 
 ## Setup
 
 ```bash
-# Install dependencies
+# 1. Install dependencies
 pip install -r requirements.txt
 
-# Add API key
-echo "OPENAI_API_KEY=your-key" > .env
+# 2. Add API key
+cp .env.example .env
+# Edit .env and add your OpenAI API key
 
-# Initialize database + build vector store
+# 3. Initialize database and build vector store
 python setup/init_db.py
 python setup/build_vector_store.py
 
-# Run Streamlit app
+# 4a. Run Streamlit app (recommended)
 streamlit run app.py
 
-# Or run FastAPI backend
-uvicorn api:app --reload
+# 4b. Or run FastAPI backend separately
+uvicorn api:app --reload --port 8000
 ```
+
+**Requirements:** Python 3.10+, OpenAI API key.
 
 ---
 
@@ -105,26 +144,47 @@ uvicorn api:app --reload
 ```
 FinAgent/
 ├── agent/
-│   ├── graph.py          # LangGraph pipeline (StateGraph, 3 nodes)
-│   ├── sql_agent.py      # Text2SQL — schema injection + GPT-4o + SQLite
-│   ├── rag_agent.py      # RAG — custom VectorDB query + GPT-4o
-│   ├── report_agent.py   # Synthesis — structured markdown report
-│   └── vector_store.py   # Custom VectorDB (embeddings + cosine similarity)
+│   ├── graph.py            # LangGraph pipeline — StateGraph, 3 nodes, streaming
+│   ├── sql_agent.py        # Text2SQL — schema injection + GPT-4o + SQLite
+│   ├── rag_agent.py        # RAG — custom VectorDB query + GPT-4o synthesis
+│   ├── report_agent.py     # Report synthesis — structured markdown output
+│   └── vector_store.py     # Custom VectorDB — embeddings + cosine similarity
 ├── setup/
-│   ├── init_db.py        # SQLite schema + seed data
-│   └── build_vector_store.py
-├── app.py                # Streamlit frontend
-├── api.py                # FastAPI backend
+│   ├── init_db.py          # SQLite schema creation + seed data (UNIQUE constraint)
+│   └── build_vector_store.py  # Embed financial documents → JSON vector store
+├── data/
+│   └── docs/               # Source financial documents for RAG
+├── app.py                  # Streamlit frontend — streaming, session state
+├── api.py                  # FastAPI backend — POST /analyze
 └── requirements.txt
 ```
 
 ---
 
-## Built By
+## What This Demonstrates
 
-**Keonhee** — Business Administration, Sungkyunkwan University (SKKU), South Korea.
-Agentic AI developer building production systems at the intersection of AI engineering and business strategy.
+- **Multi-agent orchestration** — LangGraph StateGraph with conditional routing and typed shared state
+- **RAG pipeline** — custom vector database, embedding generation, cosine similarity retrieval
+- **Text2SQL** — LLM-generated SQL with schema injection for accuracy
+- **Production deployment** — live Streamlit app, FastAPI backend, streaming output
+- **Korean market domain** — Korean public company financial data (DART), Korean language support
+- **System design decisions** — documented tradeoffs (custom VectorDB vs. ChromaDB, why schema injection, why streaming)
 
-**Other projects:**
-- [DART Financial App](https://keonhee-strategy.streamlit.app) — Samsung data via DART API → SQLite → RAG → GPT-4o
-- [github.com/keonhee3337-art](https://github.com/keonhee3337-art)
+---
+
+## Related Projects
+
+- **DART MCP Server** — Custom MCP server exposing Korean DART financial data (search, financials, disclosures) as tools for AI agents. [GitHub →](https://github.com/keonhee3337-art)
+- **DART Financial App** — Samsung data via DART API → SQLite → RAG → GPT-4o. [Live →](https://keonhee-strategy.streamlit.app)
+
+---
+
+## About
+
+**Keonhee Kim** — Business Administration, Sungkyunkwan University (SKKU), South Korea (UTC+9).
+
+Builds agentic AI systems end-to-end: LangGraph, RAG pipelines, custom VectorDB, Text2SQL, MCP servers, FastAPI, Streamlit. Focused on the intersection of AI engineering and business applications — particularly Korean market data and financial analysis automation.
+
+**Stack:** Python · LangGraph · RAG · OpenAI API · FastAPI · Streamlit · SQLite · NumPy · MCP
+
+[GitHub](https://github.com/keonhee3337-art) · [Live demo](https://keonhee-finagent.streamlit.app)
