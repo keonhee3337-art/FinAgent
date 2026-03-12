@@ -17,7 +17,6 @@ def get_graph():
     """Build the LangGraph pipeline once and cache it for all requests."""
     return build_graph()
 
-
 load_dotenv()
 
 app = FastAPI(
