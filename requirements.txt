@@ -1,10 +1,7 @@
 openai
 langchain
 langchain-openai
-langgraph
-chromadb
+langgraph>=1.1.2
 streamlit
-fastapi
-uvicorn
 pandas
 python-dotenv
